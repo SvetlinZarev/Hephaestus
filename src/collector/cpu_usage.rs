@@ -17,9 +17,9 @@ impl Default for Config {
 
 pub struct CpuUsageCollector {
     config: Config,
+    system: Arc<Mutex<System>>,
     core_usage: GaugeVec,
     total_usage: Gauge,
-    system: Arc<Mutex<System>>,
 }
 
 impl CpuUsageCollector {

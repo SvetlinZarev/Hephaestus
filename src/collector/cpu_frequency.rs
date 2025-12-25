@@ -17,8 +17,8 @@ impl Default for Config {
 
 pub struct CpuFrequencyCollector {
     config: Config,
-    core_freq: IntGaugeVec,
     system: Arc<Mutex<System>>,
+    core_freq: IntGaugeVec,
 }
 
 impl CpuFrequencyCollector {
