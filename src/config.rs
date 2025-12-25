@@ -1,3 +1,4 @@
+use crate::collector::cpu_usage;
 use config::Config;
 use serde::Deserialize;
 use std::time::Duration;
@@ -40,6 +41,11 @@ impl Default for Http {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Collectors {
+    pub cpu_usage_collector: cpu_usage::Config,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Configuration {
     #[serde(default = "Log::default")]
@@ -47,6 +53,9 @@ pub struct Configuration {
 
     #[serde(default = "Http::default")]
     pub http: Http,
+
+    #[serde(default = "Collectors::default")]
+    pub collectors: Collectors,
 }
 
 impl Configuration {
