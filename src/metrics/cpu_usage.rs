@@ -1,7 +1,8 @@
-use crate::collector::{Collector, Metric};
+use crate::metrics::{Collector, Metric};
 use crate::data_source::cpu_usage::DataSource;
 use prometheus::{Gauge, GaugeVec, Opts, Registry};
 use serde::Deserialize;
+
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
@@ -41,7 +42,7 @@ where
 
 impl<T> Metric for CpuUsage<T>
 where
-    T: DataSource 
+    T: DataSource + Send + Sync + Clone + 'static,
 {
     fn name(&self) -> &'static str {
         "cpu-usage"
@@ -51,10 +52,10 @@ where
         self.config.enabled
     }
 
-    fn register(&self, registry: &Registry) -> anyhow::Result<()> {
+    fn register(self, registry: &Registry) -> anyhow::Result<Box<dyn Collector>> {
         registry.register(Box::new(self.core_usage.clone()))?;
         registry.register(Box::new(self.total_usage.clone()))?;
-        Ok(())
+        Ok(Box::new(self))
     }
 }
 

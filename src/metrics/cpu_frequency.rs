@@ -1,5 +1,5 @@
-use crate::collector::{Collector, Metric};
 use crate::data_source::cpu_frequency::DataSource;
+use crate::metrics::{Collector, Metric};
 use prometheus::{IntGaugeVec, Opts, Registry};
 use serde::Deserialize;
 
@@ -38,7 +38,7 @@ where
 
 impl<T> Metric for CpuFrequency<T>
 where
-    T: DataSource,
+    T: DataSource + Send + Sync + Clone + 'static,
 {
     fn name(&self) -> &'static str {
         "cpu-frequency"
@@ -48,9 +48,9 @@ where
         self.config.enabled
     }
 
-    fn register(&self, registry: &Registry) -> anyhow::Result<()> {
+    fn register(self, registry: &Registry) -> anyhow::Result<Box<dyn Collector>> {
         registry.register(Box::new(self.core_freq.clone()))?;
-        Ok(())
+        Ok(Box::new(self))
     }
 }
 

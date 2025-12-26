@@ -9,7 +9,7 @@ pub trait Metric {
 
     fn enabled(&self) -> bool;
 
-    fn register(&self, registry: &Registry) -> anyhow::Result<()>;
+    fn register(self, registry: &Registry) -> anyhow::Result<Box<dyn Collector>>;
 }
 
 #[async_trait::async_trait]

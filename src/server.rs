@@ -1,12 +1,11 @@
-use crate::config::Configuration;
 use crate::server::shutdown::shutdown_signal;
+use crate::server::state::AppState;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
 use axum::Router;
 use std::error::Error;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tower::Layer;
@@ -22,13 +21,13 @@ use tracing::Level;
 
 pub mod handler;
 pub mod shutdown;
+pub mod state;
 
-pub async fn start_server(
-    configuration: Arc<Configuration>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let router = create_router(configuration.clone());
+pub async fn start_server(state: AppState) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let config = state.configuration.clone();
+    let router = create_router(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], configuration.http.port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.http.port));
     let listener = TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("Could not bind to {}: {}", addr, e))?;
@@ -41,14 +40,14 @@ pub async fn start_server(
     Ok(())
 }
 
-fn create_router(cfg: Arc<Configuration>) -> Router {
+fn create_router(state: AppState) -> Router {
     let router = Router::new()
-        .route("/metrics", get(|| handler::metrics()))
-        .route("/health", get(|| handler::health_check()))
+        .route("/metrics", get(handler::metrics))
+        .route("/health", get(handler::health_check))
         .layer(CatchPanicLayer::new())
         .layer(TimeoutLayer::with_status_code(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Duration::from_millis(cfg.http.timeout),
+            Duration::from_millis(state.configuration.http.timeout),
         ))
         .layer(
             TraceLayer::new_for_http()
@@ -74,7 +73,7 @@ fn create_router(cfg: Arc<Configuration>) -> Router {
         )
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
-        .with_state(cfg);
+        .with_state(state);
 
     Router::new().fallback_service(NormalizePathLayer::trim_trailing_slash().layer(router))
 }

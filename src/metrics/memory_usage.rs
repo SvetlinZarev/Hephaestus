@@ -1,4 +1,4 @@
-use crate::collector::{Collector, Metric};
+use crate::metrics::{Collector, Metric};
 use crate::data_source::memory_usage::DataSource;
 use prometheus::{IntGauge, Registry};
 use serde::Deserialize;
@@ -67,7 +67,7 @@ where
 
 impl<T> Metric for MemoryUsage<T>
 where
-    T: DataSource,
+    T: DataSource + Send + Sync + Clone + 'static,
 {
     fn name(&self) -> &'static str {
         "memory-usage"
@@ -77,7 +77,7 @@ where
         self.config.enabled
     }
 
-    fn register(&self, registry: &Registry) -> anyhow::Result<()> {
+    fn register(self, registry: &Registry) -> anyhow::Result<Box<dyn Collector>> {
         if self.config.report_swap {
             registry.register(Box::new(self.metrics.swap_free.clone()))?;
             registry.register(Box::new(self.metrics.swap_used.clone()))?;
@@ -89,7 +89,7 @@ where
         registry.register(Box::new(self.metrics.mem_avail.clone()))?;
         registry.register(Box::new(self.metrics.mem_total.clone()))?;
 
-        Ok(())
+        Ok(Box::new(self))
     }
 }
 
