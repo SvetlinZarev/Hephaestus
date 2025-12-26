@@ -8,3 +8,4 @@ pub mod config;
 pub mod logging;
 pub mod server;
 pub (crate) mod collector;
+pub (crate) mod data_source;

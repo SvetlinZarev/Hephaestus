@@ -1,8 +1,7 @@
 use crate::collector::{Collector, Metric};
+use crate::data_source::memory_usage::DataSource;
 use prometheus::{IntGauge, Registry};
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
-use sysinfo::{MemoryRefreshKind, System};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
@@ -19,10 +18,10 @@ impl Default for Config {
     }
 }
 
-pub struct MemoryUsage {
+pub struct MemoryUsage<T> {
     config: Config,
-    system: Arc<Mutex<System>>,
     metrics: Metrics,
+    data_source: T,
 }
 
 #[derive(Clone)]
@@ -37,8 +36,11 @@ struct Metrics {
     mem_total: IntGauge,
 }
 
-impl MemoryUsage {
-    pub fn new(config: Config, system: Arc<Mutex<System>>) -> anyhow::Result<Self> {
+impl<T> MemoryUsage<T>
+where
+    T: DataSource,
+{
+    pub fn new(config: Config, data_source: T) -> anyhow::Result<Self> {
         let metrics = Metrics {
             swap_free: IntGauge::new("system_swap_free_bytes", "Amount of free swap memory")?,
             swap_used: IntGauge::new("system_swap_used_bytes", "Amount of used swap memory")?,
@@ -57,24 +59,22 @@ impl MemoryUsage {
 
         Ok(Self {
             config,
-            system,
+            data_source,
             metrics,
         })
     }
 }
 
-#[async_trait::async_trait]
-impl Metric for MemoryUsage {
+impl<T> Metric for MemoryUsage<T>
+where
+    T: DataSource,
+{
     fn name(&self) -> &'static str {
         "memory-usage"
     }
 
     fn enabled(&self) -> bool {
         self.config.enabled
-    }
-
-    async fn supported(&self) -> bool {
-        true
     }
 
     fn register(&self, registry: &Registry) -> anyhow::Result<()> {
@@ -94,38 +94,31 @@ impl Metric for MemoryUsage {
 }
 
 #[async_trait::async_trait]
-impl Collector for MemoryUsage {
+impl<T> Collector for MemoryUsage<T>
+where
+    T: DataSource + Send + Sync + Clone + 'static,
+{
     async fn collect(&self) -> anyhow::Result<()> {
-        let system = self.system.clone();
+        let data_source = self.data_source.clone();
         let metrics = self.metrics.clone();
         let report_swap = self.config.report_swap;
 
-        tokio::task::spawn_blocking(move || match system.lock() {
-            Err(error) => Err(anyhow::anyhow!(
-                "Failed to refresh the memory usage statistics due to poisoned mutex: {}",
-                error
-            )),
-
-            Ok(mut system) => {
-                system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
-
-                if report_swap {
-                    system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_swap());
-                    metrics.swap_free.set(system.free_swap() as i64);
-                    metrics.swap_used.set(system.used_swap() as i64);
-                    metrics.swap_total.set(system.total_swap() as i64);
-                }
-
-                metrics.mem_free.set(system.free_memory() as i64);
-                metrics.mem_used.set(system.used_memory() as i64);
-                metrics.mem_avail.set(system.available_memory() as i64);
-                metrics.mem_total.set(system.total_memory() as i64);
-
-                Ok(())
+        tokio::task::spawn_blocking(move || {
+            if report_swap {
+                let (total, used, free) = data_source.swap()?;
+                metrics.swap_free.set(free as i64);
+                metrics.swap_used.set(used as i64);
+                metrics.swap_total.set(total as i64);
             }
-        })
-        .await??;
 
-        Ok(())
+            let (total, used, free, avail) = data_source.ram()?;
+            metrics.mem_free.set(free as i64);
+            metrics.mem_used.set(used as i64);
+            metrics.mem_total.set(total as i64);
+            metrics.mem_avail.set(avail as i64);
+
+            Ok(())
+        })
+        .await?
     }
 }

@@ -1,16 +1,13 @@
 use prometheus::Registry;
 
-pub mod cpu_usage;
 pub mod cpu_frequency;
+pub mod cpu_usage;
 pub mod memory_usage;
 
-#[async_trait::async_trait]
-pub trait Metric: Send + Sync {
+pub trait Metric {
     fn name(&self) -> &'static str;
 
     fn enabled(&self) -> bool;
-
-    async fn supported(&self) -> bool;
 
     fn register(&self, registry: &Registry) -> anyhow::Result<()>;
 }

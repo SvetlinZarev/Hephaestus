@@ -1,8 +1,7 @@
 use crate::collector::{Collector, Metric};
+use crate::data_source::cpu_usage::DataSource;
 use prometheus::{Gauge, GaugeVec, Opts, Registry};
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
-use sysinfo::System;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
@@ -15,15 +14,18 @@ impl Default for Config {
     }
 }
 
-pub struct CpuUsage {
+pub struct CpuUsage<T> {
     config: Config,
-    system: Arc<Mutex<System>>,
     core_usage: GaugeVec,
     total_usage: Gauge,
+    data_source: T,
 }
 
-impl CpuUsage {
-    pub fn new(config: Config, system: Arc<Mutex<System>>) -> anyhow::Result<Self> {
+impl<T> CpuUsage<T>
+where
+    T: DataSource,
+{
+    pub fn new(config: Config, data_source: T) -> anyhow::Result<Self> {
         let opts = Opts::new("system_cpu_core_usage", "CPU usage percentage per core");
         let core_usage = GaugeVec::new(opts, &["core"])?;
         let total_usage = Gauge::new("system_cpu_total_usage", "CPU usage across all cores")?;
@@ -32,23 +34,21 @@ impl CpuUsage {
             config,
             core_usage,
             total_usage,
-            system,
+            data_source,
         })
     }
 }
 
-#[async_trait::async_trait]
-impl Metric for CpuUsage {
+impl<T> Metric for CpuUsage<T>
+where
+    T: DataSource 
+{
     fn name(&self) -> &'static str {
         "cpu-usage"
     }
 
     fn enabled(&self) -> bool {
         self.config.enabled
-    }
-
-    async fn supported(&self) -> bool {
-        true
     }
 
     fn register(&self, registry: &Registry) -> anyhow::Result<()> {
@@ -59,31 +59,26 @@ impl Metric for CpuUsage {
 }
 
 #[async_trait::async_trait]
-impl Collector for CpuUsage {
+impl<T> Collector for CpuUsage<T>
+where
+    T: DataSource + Send + Sync + Clone + 'static,
+{
     async fn collect(&self) -> anyhow::Result<()> {
-        let system = self.system.clone();
+        let datasource = self.data_source.clone();
         let total_usage = self.total_usage.clone();
         let core_usage = self.core_usage.clone();
 
-        tokio::task::spawn_blocking(move || match system.lock() {
-            Err(error) => Err(anyhow::anyhow!(
-                "Failed to refresh the CPU usage statistics due to poisoned mutex: {}",
-                error
-            )),
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let (overall, per_core) = datasource.cpu_usage()?;
+            total_usage.set(overall);
 
-            Ok(mut system) => {
-                system.refresh_cpu_usage();
-                let cpus = system.cpus();
-
-                total_usage.set(system.global_cpu_usage() as f64);
-                for cpu in cpus.iter() {
-                    core_usage
-                        .with_label_values(&[cpu.name()])
-                        .set(cpu.cpu_usage() as f64);
-                }
-
-                Ok(())
+            for (idx, &usage) in per_core.iter().enumerate() {
+                core_usage
+                    .with_label_values(&[format!("{}", idx)])
+                    .set(usage);
             }
+
+            Ok(())
         })
         .await??;
 

@@ -1,8 +1,7 @@
 use crate::collector::{Collector, Metric};
+use crate::data_source::cpu_frequency::DataSource;
 use prometheus::{IntGaugeVec, Opts, Registry};
 use serde::Deserialize;
-use std::sync::{Arc, Mutex};
-use sysinfo::System;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
@@ -15,37 +14,38 @@ impl Default for Config {
     }
 }
 
-pub struct CpuFrequency {
+pub struct CpuFrequency<T> {
     config: Config,
-    system: Arc<Mutex<System>>,
     core_freq: IntGaugeVec,
+    data_source: T,
 }
 
-impl CpuFrequency {
-    pub fn new(config: Config, system: Arc<Mutex<System>>) -> anyhow::Result<Self> {
+impl<T> CpuFrequency<T>
+where
+    T: DataSource,
+{
+    pub fn new(config: Config, data_source: T) -> anyhow::Result<Self> {
         let opts = Opts::new("system_cpu_core_frequency", "CPU core frequency");
         let core_freq = IntGaugeVec::new(opts, &["core"])?;
 
         Ok(Self {
             config,
             core_freq,
-            system,
+            data_source,
         })
     }
 }
 
-#[async_trait::async_trait]
-impl Metric for CpuFrequency {
+impl<T> Metric for CpuFrequency<T>
+where
+    T: DataSource,
+{
     fn name(&self) -> &'static str {
         "cpu-frequency"
     }
 
     fn enabled(&self) -> bool {
         self.config.enabled
-    }
-
-    async fn supported(&self) -> bool {
-        true
     }
 
     fn register(&self, registry: &Registry) -> anyhow::Result<()> {
@@ -55,27 +55,23 @@ impl Metric for CpuFrequency {
 }
 
 #[async_trait::async_trait]
-impl Collector for CpuFrequency {
+impl<T> Collector for CpuFrequency<T>
+where
+    T: DataSource + Send + Sync + Clone + 'static,
+{
     async fn collect(&self) -> anyhow::Result<()> {
-        let system = self.system.clone();
+        let data_source = self.data_source.clone();
         let core_freq = self.core_freq.clone();
 
-        tokio::task::spawn_blocking(move || match system.lock() {
-            Err(error) => Err(anyhow::anyhow!(
-                "Failed to refresh the CPU frequency statistics due to poisoned mutex: {}",
-                error
-            )),
-
-            Ok(mut system) => {
-                system.refresh_cpu_frequency();
-                for cpu in system.cpus() {
-                    core_freq
-                        .with_label_values(&[cpu.name()])
-                        .set(cpu.frequency() as i64);
-                }
-
-                Ok(())
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let freq = data_source.cpu_frequency()?;
+            for (idx, freq) in freq.into_iter().enumerate() {
+                core_freq
+                    .with_label_values(&[format!("{}", idx)])
+                    .set(freq as i64);
             }
+
+            Ok(())
         })
         .await??;
 
