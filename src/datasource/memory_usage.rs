@@ -120,9 +120,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::memory_usage::MemoryUsage;
+    use crate::datasource::memory_usage::{MemoryUsage, PATH_MEM_INFO};
     use crate::datasource::tests::HardcodedReader;
     use crate::metrics::memory_usage::DataSource;
+    use std::collections::HashMap;
 
     const MEM_INFO: &'static str = r#"MemTotal:       61489320 kB
 MemFree:        44422752 kB
@@ -184,7 +185,10 @@ DirectMap1G:    49283072 kB
 
     #[tokio::test]
     async fn test_parse_ram_meminfo() {
-        let reader = HardcodedReader::new(MEM_INFO);
+        let mut test_data = HashMap::new();
+        test_data.insert(PATH_MEM_INFO.to_string(), MEM_INFO.to_owned());
+
+        let reader = HardcodedReader::new(test_data);
         let ds = MemoryUsage::new(reader);
 
         let ram = ds.ram().await.expect("Failed to read RAM usage statistics");
@@ -198,10 +202,16 @@ DirectMap1G:    49283072 kB
 
     #[tokio::test]
     async fn test_parse_swap_meminfo() {
-        let reader = HardcodedReader::new(MEM_INFO);
+        let mut test_data = HashMap::new();
+        test_data.insert(PATH_MEM_INFO.to_string(), MEM_INFO.to_owned());
+
+        let reader = HardcodedReader::new(test_data);
         let ds = MemoryUsage::new(reader);
 
-        let swap = ds.swap().await.expect("Failed to read SWAP usage statistics");
+        let swap = ds
+            .swap()
+            .await
+            .expect("Failed to read SWAP usage statistics");
         assert_eq!(swap.total, 8_589_930_496);
         assert_eq!(swap.free, 2_147_483_648);
         assert_eq!(swap.used, 6_442_446_848);

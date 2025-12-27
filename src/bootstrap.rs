@@ -14,5 +14,9 @@ pub fn init_collectors(
     let data_source = datasource::memory_usage::MemoryUsage::new(TokioReader::new());
     collectors.push(mem_usage.register(registry, data_source)?);
 
+    let cpu_freq = metrics::cpu_frequency::CpuFrequency::new(config.cpu_frequency.clone());
+    let data_source = datasource::cpu_frequency::CpuFrequency::new(TokioReader::new());
+    collectors.push(cpu_freq.register(registry, data_source)?);
+
     Ok(collectors)
 }

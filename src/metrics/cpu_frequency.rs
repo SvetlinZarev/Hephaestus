@@ -46,6 +46,12 @@ pub struct CpuFrequency {
     config: Config,
 }
 
+impl CpuFrequency {
+    pub fn new(config: Config) -> Self {
+        Self { config }
+    }
+}
+
 impl<T> Metric<T> for CpuFrequency
 where
     T: DataSource + Send + Sync + 'static,
