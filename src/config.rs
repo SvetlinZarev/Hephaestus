@@ -1,4 +1,4 @@
-use crate::metrics::{cpu_frequency, cpu_usage, memory_usage, network_io};
+use crate::metrics::{cpu_frequency, cpu_usage, disk_io, memory_usage, network_io};
 use config::Config;
 use serde::Deserialize;
 use std::time::Duration;
@@ -47,6 +47,7 @@ pub struct Collectors {
     pub cpu_frequency: cpu_frequency::Config,
     pub memory_usage: memory_usage::Config,
     pub network_io: network_io::Config,
+    pub disk_io: disk_io::Config,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
