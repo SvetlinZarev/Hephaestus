@@ -1,5 +1,5 @@
-use crate::data_source::cpu_frequency::DataSource;
-use crate::metrics::{Collector, Metric};
+use crate::domain::{Collector, Metric};
+use crate::metrics::no_operation::NoOpCollector;
 use prometheus::{IntGaugeVec, Opts, Registry};
 use serde::Deserialize;
 
@@ -14,66 +14,82 @@ impl Default for Config {
     }
 }
 
-pub struct CpuFrequency<T> {
-    config: Config,
+#[derive(Debug, Clone)]
+pub struct CpuFreqStats {
+    pub cores: Vec<u64>,
+}
+
+pub trait DataSource {
+    fn cpy_freq(&self) -> impl Future<Output = anyhow::Result<CpuFreqStats>> + Send;
+}
+
+#[derive(Clone)]
+struct Metrics {
     core_freq: IntGaugeVec,
+}
+
+impl Metrics {
+    fn register(registry: &Registry) -> anyhow::Result<Self> {
+        let core_freq_opts = Opts::new(
+            "system_cpu_core_frequency_hertz",
+            "Current frequency of the CPU core in Hertz",
+        );
+
+        let core_freq = IntGaugeVec::new(core_freq_opts, &["core"])?;
+        registry.register(Box::new(core_freq.clone()))?;
+
+        Ok(Self { core_freq })
+    }
+}
+
+pub struct CpuFrequency {
+    config: Config,
+}
+
+impl<T> Metric<T> for CpuFrequency
+where
+    T: DataSource + Send + Sync + 'static,
+{
+    fn register(self, registry: &Registry, data_source: T) -> anyhow::Result<Box<dyn Collector>> {
+        if !self.config.enabled {
+            return Ok(Box::new(NoOpCollector::new()));
+        }
+
+        let metrics = Metrics::register(registry)?;
+        Ok(Box::new(CpuFrequencyCollector::new(metrics, data_source)))
+    }
+}
+
+struct CpuFrequencyCollector<T> {
+    metrics: Metrics,
     data_source: T,
 }
 
-impl<T> CpuFrequency<T>
+impl<T> CpuFrequencyCollector<T>
 where
-    T: DataSource,
+    T: DataSource + Send + Sync + 'static,
 {
-    pub fn new(config: Config, data_source: T) -> anyhow::Result<Self> {
-        let opts = Opts::new("system_cpu_core_frequency", "CPU core frequency");
-        let core_freq = IntGaugeVec::new(opts, &["core"])?;
-
-        Ok(Self {
-            config,
-            core_freq,
+    pub fn new(metrics: Metrics, data_source: T) -> Self {
+        Self {
+            metrics,
             data_source,
-        })
-    }
-}
-
-impl<T> Metric for CpuFrequency<T>
-where
-    T: DataSource + Send + Sync + Clone + 'static,
-{
-    fn name(&self) -> &'static str {
-        "cpu-frequency"
-    }
-
-    fn enabled(&self) -> bool {
-        self.config.enabled
-    }
-
-    fn register(self, registry: &Registry) -> anyhow::Result<Box<dyn Collector>> {
-        registry.register(Box::new(self.core_freq.clone()))?;
-        Ok(Box::new(self))
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl<T> Collector for CpuFrequency<T>
+impl<T> Collector for CpuFrequencyCollector<T>
 where
-    T: DataSource + Send + Sync + Clone + 'static,
+    T: DataSource + Send + Sync + 'static,
 {
     async fn collect(&self) -> anyhow::Result<()> {
-        let data_source = self.data_source.clone();
-        let core_freq = self.core_freq.clone();
-
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let freq = data_source.cpu_frequency()?;
-            for (idx, freq) in freq.into_iter().enumerate() {
-                core_freq
-                    .with_label_values(&[format!("{}", idx)])
-                    .set(freq as i64);
-            }
-
-            Ok(())
-        })
-        .await??;
+        let stats = self.data_source.cpy_freq().await?;
+        for (core, &freq) in stats.cores.iter().enumerate() {
+            self.metrics
+                .core_freq
+                .with_label_values(&[format!("{}", core)])
+                .set(freq as i64);
+        }
 
         Ok(())
     }

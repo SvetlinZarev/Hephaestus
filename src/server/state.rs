@@ -1,8 +1,9 @@
 use crate::config::Configuration;
-use crate::metrics::Collector;
+use crate::domain::Collector;
 use axum::extract::FromRef;
 use prometheus::Registry;
 use std::sync::Arc;
+
 
 #[derive(Clone)]
 pub struct AppState {

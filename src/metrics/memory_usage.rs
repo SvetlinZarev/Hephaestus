@@ -1,5 +1,5 @@
-use crate::metrics::{Collector, Metric};
-use crate::data_source::memory_usage::DataSource;
+use crate::domain::{Collector, Metric};
+use crate::metrics::no_operation::NoOpCollector;
 use prometheus::{IntGauge, Registry};
 use serde::Deserialize;
 
@@ -18,107 +18,192 @@ impl Default for Config {
     }
 }
 
-pub struct MemoryUsage<T> {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SwapStats {
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RamStats {
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+    pub available: u64,
+    pub buffers: u64,
+    pub cache: u64,
+}
+
+pub trait DataSource {
+    fn swap(&self) -> impl Future<Output = anyhow::Result<SwapStats>> + Send;
+    fn ram(&self) -> impl Future<Output = anyhow::Result<RamStats>> + Send;
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryUsage {
     config: Config,
-    metrics: Metrics,
-    data_source: T,
+}
+
+impl MemoryUsage {
+    pub fn new(config: Config) -> Self {
+        Self { config }
+    }
+}
+
+impl<T> Metric<T> for MemoryUsage
+where
+    T: DataSource + Send + Sync + 'static,
+{
+    fn register(self, registry: &Registry, data_source: T) -> anyhow::Result<Box<dyn Collector>> {
+        if !self.config.enabled {
+            return Ok(Box::new(NoOpCollector::new()));
+        }
+
+        let mut swap_metrics = None;
+        if self.config.report_swap {
+            swap_metrics = Some(SwapMetrics::register(registry)?);
+        }
+
+        let ram_metrics = RamMetrics::register(registry)?;
+
+        Ok(Box::new(MemoryUsageCollector::new(
+            ram_metrics,
+            swap_metrics,
+            data_source,
+        )))
+    }
+}
+
+struct SwapMetrics {
+    total: IntGauge,
+    free: IntGauge,
+    used: IntGauge,
+}
+
+impl SwapMetrics {
+    fn register(registry: &Registry) -> anyhow::Result<Self> {
+        let total = IntGauge::new(
+            "system_swap_total_bytes",
+            "Total amount of swap space available",
+        )?;
+        registry.register(Box::new(total.clone()))?;
+
+        let free = IntGauge::new(
+            "system_swap_free_bytes",
+            "Amount of swap space currently unused",
+        )?;
+        registry.register(Box::new(free.clone()))?;
+
+        let used = IntGauge::new(
+            "system_swap_used_bytes",
+            "Amount of swap space currently in use",
+        )?;
+        registry.register(Box::new(used.clone()))?;
+
+        Ok(Self { total, free, used })
+    }
 }
 
 #[derive(Clone)]
-struct Metrics {
-    swap_free: IntGauge,
-    swap_used: IntGauge,
-    swap_total: IntGauge,
-
-    mem_used: IntGauge,
-    mem_free: IntGauge,
-    mem_avail: IntGauge,
-    mem_total: IntGauge,
+struct RamMetrics {
+    total: IntGauge,
+    used: IntGauge,
+    free: IntGauge,
+    avail: IntGauge,
+    buffers: IntGauge,
+    cache: IntGauge,
 }
 
-impl<T> MemoryUsage<T>
-where
-    T: DataSource,
-{
-    pub fn new(config: Config, data_source: T) -> anyhow::Result<Self> {
-        let metrics = Metrics {
-            swap_free: IntGauge::new("system_swap_free_bytes", "Amount of free swap memory")?,
-            swap_used: IntGauge::new("system_swap_used_bytes", "Amount of used swap memory")?,
-            swap_total: IntGauge::new("system_swap_total_bytes", "Amount of swap memory")?,
-            mem_used: IntGauge::new("system_memory_used_bytes", "Amount of used system memory")?,
-            mem_free: IntGauge::new(
-                "system_memory_free_bytes",
-                "Amount of available system memory",
-            )?,
-            mem_avail: IntGauge::new(
-                "system_memory_available_bytes",
-                "Amount of free system memory",
-            )?,
-            mem_total: IntGauge::new("system_memory_total_bytes", "Amount of system memory")?,
-        };
+impl RamMetrics {
+    fn register(registry: &Registry) -> anyhow::Result<Self> {
+        let total = IntGauge::new(
+            "system_memory_total_bytes",
+            "Total physical RAM installed on the system",
+        )?;
+        registry.register(Box::new(total.clone()))?;
+
+        let used = IntGauge::new(
+            "system_memory_used_bytes",
+            "Amount of memory currently used by programs (Non-reclaimable)",
+        )?;
+        registry.register(Box::new(used.clone()))?;
+
+        let free = IntGauge::new(
+            "system_memory_free_bytes",
+            "Amount of memory that is completely unused (does not include cache/buffers)",
+        )?;
+        registry.register(Box::new(free.clone()))?;
+
+        let avail = IntGauge::new(
+            "system_memory_available_bytes",
+            "Estimate of how much memory is available for starting new applications without swapping",
+        )?;
+        registry.register(Box::new(avail.clone()))?;
+
+        let buffers = IntGauge::new(
+            "system_memory_buffers_bytes",
+            "Memory used by kernel buffers (metadata/raw block storage)",
+        )?;
+        registry.register(Box::new(buffers.clone()))?;
+
+        let cache = IntGauge::new(
+            "system_memory_cache_bytes",
+            "Memory used by the page cache and reclaimable slab objects",
+        )?;
+        registry.register(Box::new(cache.clone()))?;
 
         Ok(Self {
-            config,
-            data_source,
-            metrics,
+            total,
+            used,
+            free,
+            avail,
+            buffers,
+            cache,
         })
     }
 }
 
-impl<T> Metric for MemoryUsage<T>
+struct MemoryUsageCollector<T> {
+    ram_metrics: RamMetrics,
+    swap_metrics: Option<SwapMetrics>,
+    data_source: T,
+}
+
+impl<T> MemoryUsageCollector<T>
 where
-    T: DataSource + Send + Sync + Clone + 'static,
+    T: DataSource + Send + Sync + 'static,
 {
-    fn name(&self) -> &'static str {
-        "memory-usage"
-    }
-
-    fn enabled(&self) -> bool {
-        self.config.enabled
-    }
-
-    fn register(self, registry: &Registry) -> anyhow::Result<Box<dyn Collector>> {
-        if self.config.report_swap {
-            registry.register(Box::new(self.metrics.swap_free.clone()))?;
-            registry.register(Box::new(self.metrics.swap_used.clone()))?;
-            registry.register(Box::new(self.metrics.swap_total.clone()))?;
+    fn new(ram_metrics: RamMetrics, swap_metrics: Option<SwapMetrics>, data_source: T) -> Self {
+        Self {
+            ram_metrics,
+            swap_metrics,
+            data_source,
         }
-
-        registry.register(Box::new(self.metrics.mem_free.clone()))?;
-        registry.register(Box::new(self.metrics.mem_used.clone()))?;
-        registry.register(Box::new(self.metrics.mem_avail.clone()))?;
-        registry.register(Box::new(self.metrics.mem_total.clone()))?;
-
-        Ok(Box::new(self))
     }
 }
 
 #[async_trait::async_trait]
-impl<T> Collector for MemoryUsage<T>
+impl<T> Collector for MemoryUsageCollector<T>
 where
-    T: DataSource + Send + Sync + Clone + 'static,
+    T: DataSource + Send + Sync + 'static,
 {
     async fn collect(&self) -> anyhow::Result<()> {
-        let data_source = self.data_source.clone();
-        let metrics = self.metrics.clone();
-        let report_swap = self.config.report_swap;
+        if let Some(swap_metrics) = &self.swap_metrics {
+            let stats = self.data_source.swap().await?;
+            swap_metrics.free.set(stats.free as i64);
+            swap_metrics.used.set(stats.used as i64);
+            swap_metrics.total.set(stats.total as i64);
+        }
 
-        tokio::task::spawn_blocking(move || {
-            if report_swap {
-                let (total, used, free) = data_source.swap()?;
-                metrics.swap_free.set(free as i64);
-                metrics.swap_used.set(used as i64);
-                metrics.swap_total.set(total as i64);
-            }
+        let stats = self.data_source.ram().await?;
+        self.ram_metrics.free.set(stats.free as i64);
+        self.ram_metrics.used.set(stats.used as i64);
+        self.ram_metrics.total.set(stats.total as i64);
+        self.ram_metrics.avail.set(stats.available as i64);
+        self.ram_metrics.buffers.set(stats.buffers as i64);
+        self.ram_metrics.cache.set(stats.cache as i64);
 
-            let (total, used, free, avail) = data_source.ram()?;
-            metrics.mem_free.set(free as i64);
-            metrics.mem_used.set(used as i64);
-            metrics.mem_total.set(total as i64);
-            metrics.mem_avail.set(avail as i64);
-
-            Ok(())
-        })
-        .await?
+        Ok(())
     }
 }
