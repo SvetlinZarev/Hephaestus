@@ -23,8 +23,10 @@ impl Default for Config {
 #[derive(Debug, Clone)]
 pub struct InterfaceStats {
     pub interface: String,
-    pub sent: u64,
-    pub received: u64,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+    pub packets_sent: u64,
+    pub packets_received: u64,
 }
 
 pub struct NetworkIoStats {
@@ -37,9 +39,11 @@ pub trait DataSource {
 
 #[derive(Clone)]
 struct Metrics {
-    // We use IntGaugeVec for absolute bytes read from /proc
     bytes_sent: IntGaugeVec,
     bytes_received: IntGaugeVec,
+
+    packets_sent: IntGaugeVec,
+    packets_received: IntGaugeVec,
 }
 
 impl Metrics {
@@ -58,9 +62,25 @@ impl Metrics {
         let bytes_received = IntGaugeVec::new(recv_opts, &["device"])?;
         registry.register(Box::new(bytes_received.clone()))?;
 
+        let sent_opts = Opts::new(
+            "system_network_transmit_packets_total",
+            "Total packets sent (cumulative)",
+        );
+        let packets_sent = IntGaugeVec::new(sent_opts, &["device"])?;
+        registry.register(Box::new(packets_sent.clone()))?;
+
+        let recv_opts = Opts::new(
+            "system_network_receive_packets_total",
+            "Total packets received (cumulative)",
+        );
+        let packets_received = IntGaugeVec::new(recv_opts, &["device"])?;
+        registry.register(Box::new(packets_received.clone()))?;
+
         Ok(Self {
             bytes_sent,
             bytes_received,
+            packets_sent,
+            packets_received,
         })
     }
 }
@@ -135,12 +155,22 @@ where
                 self.metrics
                     .bytes_sent
                     .with_label_values(label)
-                    .set(iface.sent as i64);
+                    .set(iface.bytes_sent as i64);
 
                 self.metrics
                     .bytes_received
                     .with_label_values(label)
-                    .set(iface.received as i64);
+                    .set(iface.bytes_received as i64);
+
+                self.metrics
+                    .packets_sent
+                    .with_label_values(label)
+                    .set(iface.packets_sent as i64);
+
+                self.metrics
+                    .packets_received
+                    .with_label_values(label)
+                    .set(iface.packets_received as i64);
             }
         }
 

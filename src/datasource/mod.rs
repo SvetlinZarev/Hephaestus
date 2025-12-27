@@ -2,6 +2,7 @@ use std::path::Path;
 
 pub mod cpu_frequency;
 pub mod memory_usage;
+pub mod network_io;
 
 pub trait Reader: Send + Sync {
     fn read_to_string(
