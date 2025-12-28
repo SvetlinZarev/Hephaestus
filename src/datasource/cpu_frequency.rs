@@ -60,20 +60,18 @@ mod tests {
     use crate::datasource::cpu_frequency::CpuFrequency;
     use crate::datasource::tests::HardcodedReader;
     use crate::metrics::cpu_frequency::DataSource;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_cpu_frequency() {
-        let mut test_data = HashMap::new();
-        test_data.insert(cpu_freq_path(0), format!("{}", 1100980));
-        test_data.insert(cpu_freq_path(1), format!("{}", 883485));
-        test_data.insert(cpu_freq_path(2), format!("{}", 4203950));
-        test_data.insert(cpu_freq_path(3), format!("{}", 5100362));
+        let mut reader = HardcodedReader::new();
+        reader.add_response(cpu_freq_path(0), format!("{}", 1100980));
+        reader.add_response(cpu_freq_path(1), format!("{}", 883485));
+        reader.add_response(cpu_freq_path(2), format!("{}", 4203950));
+        reader.add_response(cpu_freq_path(3), format!("{}", 5100362));
 
-        let reader = HardcodedReader::new(test_data);
         let ds = CpuFrequency::new(reader);
-
         let stats = ds.cpy_freq().await.unwrap();
+
         assert_eq!(4, stats.cores.len());
         assert_eq!(1000 * 1100980, stats.cores[0]);
         assert_eq!(1000 * 883485, stats.cores[1]);

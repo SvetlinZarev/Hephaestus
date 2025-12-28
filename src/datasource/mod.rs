@@ -1,10 +1,10 @@
 use std::path::Path;
 
 pub mod cpu_frequency;
+pub mod cpu_usage;
+pub mod disk_io;
 pub mod memory_usage;
 pub mod network_io;
-pub mod disk_io;
-
 
 pub trait Reader: Send + Sync {
     fn read_to_string(
@@ -33,16 +33,32 @@ impl Reader for TokioReader {
 #[cfg(test)]
 mod tests {
     use crate::datasource::Reader;
+    use std::collections::hash_map::Entry;
     use std::collections::HashMap;
+    use std::io::ErrorKind;
     use std::path::Path;
+    use std::sync::Mutex;
 
     pub struct HardcodedReader {
-        data: HashMap<String, String>,
+        data: HashMap<String, (Mutex<usize>, Vec<String>)>,
     }
 
     impl HardcodedReader {
-        pub fn new(data: HashMap<String, String>) -> Self {
-            Self { data: data.into() }
+        pub fn new() -> Self {
+            Self {
+                data: HashMap::new(),
+            }
+        }
+
+        pub fn add_response(&mut self, key: impl Into<String>, value: impl Into<String>) {
+            match self.data.entry(key.into()) {
+                Entry::Occupied(mut e) => {
+                    e.get_mut().1.push(value.into());
+                }
+                Entry::Vacant(e) => {
+                    e.insert((Mutex::new(0), vec![value.into()]));
+                }
+            }
         }
     }
 
@@ -57,10 +73,23 @@ mod tests {
 
                 match self.data.get(path.as_ref()) {
                     None => Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
+                        ErrorKind::NotFound,
                         format!("File not found: {}", path),
                     )),
-                    Some(content) => Ok(content.clone()),
+                    Some((idx, content)) => {
+                        let mut idx = idx.lock().unwrap();
+                        if *idx >= content.len() {
+                            return Err(std::io::Error::new(
+                                ErrorKind::Other,
+                                "Response not mocked",
+                            ));
+                        }
+
+                        let response = content[*idx].clone();
+                        *idx += 1;
+
+                        Ok(response)
+                    }
                 }
             }
         }

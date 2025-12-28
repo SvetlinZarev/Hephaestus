@@ -66,7 +66,6 @@ mod tests {
     use crate::datasource::network_io::{NetworkIo, PATH_NET_DEV};
     use crate::datasource::tests::HardcodedReader;
     use crate::metrics::network_io::DataSource;
-    use std::collections::HashMap;
 
     const NET_DEV_TEXT: &str = r#"Inter-|   Receive                                                |  Transmit
  face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
@@ -77,12 +76,10 @@ wlp2s0:       0       0    0    0    0     0          0         0        0      
 
     #[tokio::test]
     async fn test_network_io_datasource() {
-        let mut test_data = HashMap::new();
-        test_data.insert(PATH_NET_DEV.to_string(), NET_DEV_TEXT.to_string());
+        let mut reader = HardcodedReader::new();
+        reader.add_response(PATH_NET_DEV, NET_DEV_TEXT);
 
-        let reader = HardcodedReader::new(test_data);
         let ds = NetworkIo::new(reader);
-
         let nio = ds
             .network_io()
             .await

@@ -94,7 +94,6 @@ where
 mod tests {
     use crate::datasource::disk_io::{DiskIo, PATH_DISK_STATS};
     use crate::datasource::tests::HardcodedReader;
-    use std::collections::HashMap;
     use crate::metrics::disk_io::DataSource;
 
     const DISK_STATS: &str = r#"   7       0 loop0 133549 0 8587416 51112 0 0 0 0 0 13992709 51112 0 0 0 0 0 0
@@ -110,12 +109,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_disk_io_datasource() {
-        let mut test_data = HashMap::new();
-        test_data.insert(PATH_DISK_STATS.to_owned(), DISK_STATS.to_owned());
+        let mut reader = HardcodedReader::new();
+        reader.add_response(PATH_DISK_STATS, DISK_STATS);
 
-        let reader = HardcodedReader::new(test_data);
         let ds = DiskIo::new(reader);
-
         let stats = ds.disk_io().await.unwrap();
         assert_eq!(4, stats.disks.len());
 

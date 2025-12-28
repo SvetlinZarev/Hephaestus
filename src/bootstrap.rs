@@ -18,6 +18,10 @@ pub fn init_collectors(
     let data_source = datasource::cpu_frequency::CpuFrequency::new(TokioReader::new());
     collectors.push(cpu_freq.register(registry, data_source)?);
 
+    let cpu_usage = metrics::cpu_usage::CpuUsage::new(config.cpu_usage.clone());
+    let data_source = datasource::cpu_usage::CpuUsage::new(TokioReader::new());
+    collectors.push(cpu_usage.register(registry, data_source)?);
+
     let net_io = metrics::network_io::NetworkIo::new(config.network_io.clone());
     let data_source = datasource::network_io::NetworkIo::new(TokioReader::new());
     collectors.push(net_io.register(registry, data_source)?);
