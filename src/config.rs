@@ -1,9 +1,47 @@
 use crate::metrics::{cpu_frequency, cpu_usage, disk_io, memory_usage, network_io};
 use config::Config;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Configuration {
+    pub log: Log,
+    pub http: Http,
+    pub collectors: Collectors,
+}
+
+impl Configuration {
+    pub fn load(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
+        let config_path = config_path.as_ref();
+        let defaults = Configuration::default();
+        let defaults = serde_json::to_string(&defaults)?;
+
+        let cfg = Config::builder()
+            .add_source(config::File::from_str(&defaults, config::FileFormat::Json))
+            .add_source(
+                config::File::with_name(config_path.join("config.toml").to_string_lossy().as_ref())
+                    .format(config::FileFormat::Toml)
+                    .required(false),
+            )
+            .add_source(
+                config::File::with_name(config_path.join("config.yml").to_string_lossy().as_ref())
+                    .format(config::FileFormat::Yaml)
+                    .required(false),
+            )
+            .add_source(
+                config::File::with_name(config_path.join("config.json").to_string_lossy().as_ref())
+                    .format(config::FileFormat::Json)
+                    .required(false),
+            )
+            .add_source(config::Environment::with_prefix("CFG").separator("__"))
+            .build()?;
+
+        Ok(cfg.try_deserialize()?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Log {
     pub enable_stdout: bool,
     pub enable_log_file: bool,
@@ -18,7 +56,7 @@ impl Default for Log {
         Self {
             enable_stdout: true,
             enable_log_file: true,
-            log_file_directory: Some("/tmp/var/log/hephaestus/".to_owned()),
+            log_file_directory: Some("/var/log/hephaestus/".to_owned()),
             level: "INFO".to_owned(),
             directives: vec![],
             max_log_files: 7,
@@ -26,63 +64,28 @@ impl Default for Log {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http {
     pub port: u16,
+    pub addr: String,
     pub timeout: u64,
 }
 
 impl Default for Http {
     fn default() -> Self {
         Self {
-            port: 8081,
+            port: 9123,
+            addr: "127.0.0.1".to_owned(),
             timeout: Duration::from_secs(10).as_millis() as u64,
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Collectors {
     pub cpu_usage: cpu_usage::Config,
     pub cpu_frequency: cpu_frequency::Config,
     pub memory_usage: memory_usage::Config,
     pub network_io: network_io::Config,
     pub disk_io: disk_io::Config,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct Configuration {
-    #[serde(default = "Log::default")]
-    pub log: Log,
-
-    #[serde(default = "Http::default")]
-    pub http: Http,
-
-    #[serde(default = "Collectors::default")]
-    pub collectors: Collectors,
-}
-
-impl Configuration {
-    pub fn load() -> Result<Self, config::ConfigError> {
-        let cfg = Config::builder()
-            .add_source(
-                config::File::with_name("config.toml")
-                    .format(config::FileFormat::Toml)
-                    .required(false),
-            )
-            .add_source(
-                config::File::with_name("config.yml")
-                    .format(config::FileFormat::Toml)
-                    .required(false),
-            )
-            .add_source(
-                config::File::with_name("config.json")
-                    .format(config::FileFormat::Toml)
-                    .required(false),
-            )
-            .add_source(config::Environment::with_prefix("CFG").separator("__"))
-            .build()?;
-
-        cfg.try_deserialize()
-    }
 }

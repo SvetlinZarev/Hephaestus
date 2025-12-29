@@ -27,8 +27,8 @@ pub async fn start_server(state: AppState) -> Result<(), Box<dyn Error + Send + 
     let config = state.configuration.clone();
     let router = create_router(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.http.port));
-    let listener = TcpListener::bind(&addr)
+    let addr = format!("{}:{}", config.http.addr, config.http.port).parse::<SocketAddr>()?;
+    let listener = TcpListener::bind(addr)
         .await
         .map_err(|e| format!("Could not bind to {}: {}", addr, e))?;
 

@@ -1,9 +1,9 @@
 use crate::domain::{Collector, Metric};
 use crate::metrics::no_operation::NoOpCollector;
 use prometheus::{IntGaugeVec, Opts, Registry};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub enabled: bool,
 }
