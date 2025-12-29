@@ -1,7 +1,12 @@
 use crate::domain::{Collector, Metric};
 use crate::metrics::no_operation::NoOpCollector;
-use prometheus::{IntGaugeVec, Opts, Registry};
+use prometheus::core::Desc;
+use prometheus::proto::{LabelPair, MetricFamily, MetricType};
+use prometheus::Registry;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::time::Instant;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -30,61 +35,116 @@ pub struct InterfaceStats {
 }
 
 pub struct NetworkIoStats {
+    pub timestamp: Instant,
     pub interfaces: Vec<InterfaceStats>,
 }
 
 pub trait DataSource {
     fn network_io(&self) -> impl Future<Output = anyhow::Result<NetworkIoStats>> + Send;
 }
-
 #[derive(Clone)]
-struct Metrics {
-    bytes_sent: IntGaugeVec,
-    bytes_received: IntGaugeVec,
-
-    packets_sent: IntGaugeVec,
-    packets_received: IntGaugeVec,
+pub struct Metrics {
+    state: Arc<Mutex<Option<NetworkIoStats>>>,
+    bytes_sent: Desc,
+    bytes_received: Desc,
+    packets_sent: Desc,
+    packets_received: Desc,
 }
 
 impl Metrics {
-    fn register(registry: &Registry) -> anyhow::Result<Self> {
-        let sent_opts = Opts::new(
-            "system_network_transmit_bytes_total",
-            "Total bytes sent (cumulative)",
-        );
-        let bytes_sent = IntGaugeVec::new(sent_opts, &["device"])?;
-        registry.register(Box::new(bytes_sent.clone()))?;
+    pub fn new(state: Arc<Mutex<Option<NetworkIoStats>>>) -> Self {
+        let labels = vec!["device".to_string()];
+        Self {
+            state,
+            bytes_sent: Desc::new(
+                "system_network_transmit_bytes_total".into(),
+                "Total bytes sent".into(),
+                labels.clone(),
+                HashMap::new(),
+            )
+            .unwrap(),
+            bytes_received: Desc::new(
+                "system_network_receive_bytes_total".into(),
+                "Total bytes received".into(),
+                labels.clone(),
+                HashMap::new(),
+            )
+            .unwrap(),
+            packets_sent: Desc::new(
+                "system_network_transmit_packets_total".into(),
+                "Total packets sent".into(),
+                labels.clone(),
+                HashMap::new(),
+            )
+            .unwrap(),
+            packets_received: Desc::new(
+                "system_network_receive_packets_total".into(),
+                "Total packets received".into(),
+                labels,
+                HashMap::new(),
+            )
+            .unwrap(),
+        }
+    }
 
-        let recv_opts = Opts::new(
-            "system_network_receive_bytes_total",
-            "Total bytes received (cumulative)",
-        );
-        let bytes_received = IntGaugeVec::new(recv_opts, &["device"])?;
-        registry.register(Box::new(bytes_received.clone()))?;
+    pub fn register(&self, registry: &Registry) -> anyhow::Result<()> {
+        registry.register(Box::new(self.clone()))?;
+        Ok(())
+    }
 
-        let sent_opts = Opts::new(
-            "system_network_transmit_packets_total",
-            "Total packets sent (cumulative)",
-        );
-        let packets_sent = IntGaugeVec::new(sent_opts, &["device"])?;
-        registry.register(Box::new(packets_sent.clone()))?;
+    fn build_metric_family<F>(&self, desc: &Desc, stats: &NetworkIoStats, extract: F) -> MetricFamily
+    where
+        F: Fn(&InterfaceStats) -> u64,
+    {
+        let mut mf = MetricFamily::default();
+        mf.set_name(desc.fq_name.clone());
+        mf.set_help(desc.help.clone());
+        mf.set_field_type(MetricType::COUNTER);
 
-        let recv_opts = Opts::new(
-            "system_network_receive_packets_total",
-            "Total packets received (cumulative)",
-        );
-        let packets_received = IntGaugeVec::new(recv_opts, &["device"])?;
-        registry.register(Box::new(packets_received.clone()))?;
+        let mut metrics = Vec::with_capacity(stats.interfaces.len());
+        for iface in &stats.interfaces {
+            let mut m = prometheus::proto::Metric::default();
 
-        Ok(Self {
-            bytes_sent,
-            bytes_received,
-            packets_sent,
-            packets_received,
-        })
+            let mut lp = LabelPair::default();
+            lp.set_name("device".into());
+            lp.set_value(iface.interface.clone());
+            m.set_label(vec![lp].into());
+
+            let mut c = prometheus::proto::Counter::default();
+            c.set_value(extract(iface) as f64);
+            m.set_counter(c);
+
+            metrics.push(m);
+        }
+        mf.set_metric(metrics.into());
+        mf
     }
 }
 
+impl prometheus::core::Collector for Metrics {
+    fn desc(&self) -> Vec<&Desc> {
+        vec![
+            &self.bytes_sent,
+            &self.bytes_received,
+            &self.packets_sent,
+            &self.packets_received,
+        ]
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        let guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(stats) = guard.as_ref() else {
+            return vec![];
+        };
+
+        vec![
+            self.build_metric_family(&self.bytes_sent, stats, |i| i.bytes_sent),
+            self.build_metric_family(&self.bytes_received, stats, |i| i.bytes_received),
+            self.build_metric_family(&self.packets_sent, stats, |i| i.packets_sent),
+            self.build_metric_family(&self.packets_received, stats, |i| i.packets_received),
+        ]
+    }
+}
 pub struct NetworkIo {
     config: Config,
 }
@@ -103,28 +163,33 @@ where
             return Ok(Box::new(NoOpCollector::new()));
         }
 
-        let metrics = Metrics::register(registry)?;
-        Ok(Box::new(NetworkIoCollector::new(
-            self.config,
-            metrics,
-            data_source,
-        )))
+        let collector = NetworkIoCollector::new(self.config, data_source);
+        let measurements = collector.measurements();
+
+        let metrics = Metrics::new(measurements);
+        metrics.register(registry)?;
+
+        Ok(Box::new(collector))
     }
 }
 
 struct NetworkIoCollector<T> {
     config: Config,
-    metrics: Metrics,
+    measurement: Arc<Mutex<Option<NetworkIoStats>>>,
     data_source: T,
 }
 
 impl<T> NetworkIoCollector<T> {
-    fn new(config: Config, metrics: Metrics, data_source: T) -> Self {
+    fn new(config: Config, data_source: T) -> Self {
         Self {
             config,
-            metrics,
             data_source,
+            measurement: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn measurements(&self) -> Arc<Mutex<Option<NetworkIoStats>>> {
+        Arc::clone(&self.measurement)
     }
 
     fn should_collect(&self, interface_name: &str) -> bool {
@@ -146,31 +211,18 @@ where
     T: DataSource + Send + Sync + 'static,
 {
     async fn collect(&self) -> anyhow::Result<()> {
-        let stats = self.data_source.network_io().await?;
+        let mut stats = self.data_source.network_io().await?;
+        stats
+            .interfaces
+            .retain(|iface| self.should_collect(iface.interface.as_str()));
 
-        for iface in stats.interfaces {
-            if self.should_collect(&iface.interface) {
-                let label = &[iface.interface.as_str()];
-
-                self.metrics
-                    .bytes_sent
-                    .with_label_values(label)
-                    .set(iface.bytes_sent as i64);
-
-                self.metrics
-                    .bytes_received
-                    .with_label_values(label)
-                    .set(iface.bytes_received as i64);
-
-                self.metrics
-                    .packets_sent
-                    .with_label_values(label)
-                    .set(iface.packets_sent as i64);
-
-                self.metrics
-                    .packets_received
-                    .with_label_values(label)
-                    .set(iface.packets_received as i64);
+        let mut guard = self.measurement.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            None => *guard = Some(stats),
+            Some(prev) => {
+                if prev.timestamp < stats.timestamp {
+                    *guard = Some(stats);
+                }
             }
         }
 

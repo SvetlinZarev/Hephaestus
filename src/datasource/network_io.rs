@@ -1,5 +1,6 @@
 use crate::datasource::Reader;
 use crate::metrics::network_io::{DataSource, InterfaceStats, NetworkIoStats};
+use tokio::time::Instant;
 
 const PATH_NET_DEV: &str = "/proc/net/dev";
 
@@ -23,6 +24,7 @@ where
     fn network_io(&self) -> impl Future<Output = anyhow::Result<NetworkIoStats>> + Send {
         async move {
             let content = self.reader.read_to_string(PATH_NET_DEV).await?;
+            let timestamp = Instant::now();
             let mut interfaces = Vec::new();
 
             for line in content.lines().skip(2) {
@@ -56,7 +58,10 @@ where
                 });
             }
 
-            Ok(NetworkIoStats { interfaces })
+            Ok(NetworkIoStats {
+                timestamp,
+                interfaces,
+            })
         }
     }
 }
