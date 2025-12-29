@@ -195,7 +195,24 @@ impl<T> DiskIoCollector<T> {
     }
 
     fn should_collect(&self, device_name: &str) -> bool {
-        !(device_name.starts_with("loop") || device_name.starts_with("zram"))
+        if device_name.starts_with("loop") || device_name.starts_with("zram") {
+            return false;
+        }
+
+        if device_name.starts_with("nvme") && device_name.rsplit_once('p').is_some() {
+            // Ignore NVMe partitions
+            return false;
+        }
+
+        if device_name.starts_with("sd")
+            && device_name.len() > 3
+            && device_name.as_bytes().last().unwrap().is_ascii_digit()
+        {
+            // Ignore HDD partitions (i.e. sda1, sda2, etc)
+            return false;
+        }
+
+        true
     }
 }
 
