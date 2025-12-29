@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use axum::routing::get;
 use axum::Router;
 use std::error::Error;
-use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tower::Layer;
@@ -27,15 +27,39 @@ pub async fn start_server(state: AppState) -> Result<(), Box<dyn Error + Send + 
     let config = state.configuration.clone();
     let router = create_router(state);
 
-    let addr = format!("{}:{}", config.http.addr, config.http.port).parse::<SocketAddr>()?;
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("Could not bind to {}: {}", addr, e))?;
+    let mut handles = Vec::new();
+    for addr in (config.http.addr.as_str(), config.http.port).to_socket_addrs()? {
+        let listener = TcpListener::bind(addr)
+            .await
+            .map_err(|e| format!("Could not bind to {}: {}", addr, e))?;
 
-    tracing::info!("Listening on {}", listener.local_addr()?);
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        tracing::info!("Listening on {}", listener.local_addr()?);
+
+        let router = router.clone();
+        let handle = tokio::task::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+        });
+
+        handles.push(handle);
+    }
+
+    if handles.is_empty() {
+        return Err(format!(
+            "The bind address [{}:{}] did not resolve to any IP addresses",
+            config.http.addr, config.http.port
+        )
+        .into());
+    }
+
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(())) => (),
+            Ok(Err(e)) => return Err(format!("Server failed: {}", e).into()),
+            Err(e) => return Err(format!("Server task panicked: {}", e).into()),
+        }
+    }
 
     Ok(())
 }
