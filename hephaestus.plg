@@ -9,68 +9,82 @@
   <!ENTITY logDir    "/var/log/&name;">
 ]>
 
-<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" min="7.0.0">
+<PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="&pluginURL;" min="6.9.0">
 
 <CHANGES>
 ###2025.12.31
-- Initial release
+- Initial Release
 </CHANGES>
 
 <FILE Run="/bin/bash">
 <INLINE>
-  killall &name; || true
+  if [ -x "/etc/rc.d/rc.&name;" ]; then
+    /etc/rc.d/rc.&name; stop
+  fi
   mkdir -p &pluginDir;
+  mkdir -p &logDir;
 </INLINE>
 </FILE>
 
-<FILE Name="&pluginDir;/&name;" Run="/bin/bash">
+<FILE Name="&pluginDir;/&name;">
 <URL>&binaryURL;</URL>
 </FILE>
 
-<FILE Run="/bin/bash">
+<FILE Name="/etc/rc.d/rc.&name;" Mode="0755">
 <INLINE>
-  # Move binary to system path
-  cp &pluginDir;/&name; /usr/local/sbin/&name;
-  chmod 0755 /usr/local/sbin/&name;
-
-  # Check if config already exists; if not, generate it
-  if [ ! -f "&pluginDir;/config.toml" ]; then
-    echo "Generating default configuration..."
-    /usr/local/sbin/&name; --print-config > "&pluginDir;/config.toml.tmp"
-
-    # Check if the previous command succeeded (Status 0)
-    if [ $? -eq 0 ]; then
-      mv "&pluginDir;/config.toml.tmp" "&pluginDir;/config.toml"
-      echo "Configuration saved to &pluginDir;/config.toml"
+#!/bin/bash
+case "$1" in
+  'start')
+    if [ -x "/usr/local/sbin/&name;" ]; then
+      echo "Starting &name;..."
+      nohup /usr/local/sbin/&name; &pluginDir;/config.toml > &logDir;/stdout.log 2> &logDir;/stderr.log &amp;
     else
-      rm -f "&pluginDir;/config.toml.tmp"
-      echo "Error: Failed to generate default configuration. Creating empty file instead."
-      touch "&pluginDir;/config.toml"
+      echo "Error: &name; binary not found or not executable in /usr/local/sbin/"
     fi
-  else
-    echo "Existing configuration found, skipping generation."
-  fi
+  ;;
+  'stop')
+    echo "Stopping &name;..."
+    killall &name; 2>/dev/null || true
+    sleep 1
+  ;;
+  'restart')
+    $0 stop
+    $0 start
+  ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+esac
 </INLINE>
 </FILE>
 
 <FILE Run="/bin/bash">
 <INLINE>
-  echo "Starting &name;..."
-  mkdir -p &logDir;
+  # 1. Copy to system path
+  cp &pluginDir;/&name; /usr/local/sbin/&name;
 
-  # Start the service
-  nohup /usr/local/sbin/&name; &pluginDir;/config.toml 1>&logDir;/stdout.log 2>&logDir;/stderr.log &amp;
+  # 2. Set permissions on the system binary immediately
+  chmod 0755 /usr/local/sbin/&name;
 
-  echo "Installation successful."
+  # 3. Generate config (now that we have execute permissions)
+  if [ ! -f "&pluginDir;/config.toml" ]; then
+    echo "Generating default configuration..."
+    if ! /usr/local/sbin/&name; --print-config > "&pluginDir;/config.toml"; then
+       echo "Warning: Binary failed to output config. Creating empty file."
+       touch "&pluginDir;/config.toml"
+    fi
+  fi
+
+  # 4. Start the service
+  /etc/rc.d/rc.&name; start
 </INLINE>
 </FILE>
 
 <FILE Run="/bin/bash" Method="remove">
 <INLINE>
-  killall &name;
+  /etc/rc.d/rc.&name; stop
   rm -f /usr/local/sbin/&name;
+  rm -f /etc/rc.d/rc.&name;
   rm -rf &logDir;
-  echo "&name; removed. Configuration in &pluginDir; was preserved."
 </INLINE>
 </FILE>
 
