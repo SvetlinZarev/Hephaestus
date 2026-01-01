@@ -1,6 +1,6 @@
 use crate::domain::{Collector, Metric};
 use crate::metrics::no_operation::NoOpCollector;
-use crate::metrics::util::{into_labels, maybe_counter, maybe_gauge};
+use crate::metrics::util::{into_labels, maybe_counter, maybe_gauge, update_measurement_if};
 use prometheus::Registry;
 use prometheus::core::Desc;
 use prometheus::proto::{LabelPair, MetricFamily};
@@ -434,7 +434,9 @@ where
 {
     async fn collect(&self) -> anyhow::Result<()> {
         let stats = self.data_source.disk_temps().await?;
-        *self.measurements.lock().unwrap_or_else(|e| e.into_inner()) = Some(stats);
+        let guard = self.measurements.lock().unwrap_or_else(|e| e.into_inner());
+        update_measurement_if(guard, stats, |old, new| old.timestamp < new.timestamp);
+
         Ok(())
     }
 }

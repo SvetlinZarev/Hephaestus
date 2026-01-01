@@ -1,6 +1,6 @@
 use crate::domain::{Collector, Metric};
 use crate::metrics::no_operation::NoOpCollector;
-use crate::metrics::util::{into_labels, maybe_counter};
+use crate::metrics::util::{into_labels, maybe_counter, update_measurement_if};
 use prometheus::Registry;
 use prometheus::core::Desc;
 use prometheus::proto::{LabelPair, MetricFamily};
@@ -210,15 +210,8 @@ where
             .interfaces
             .retain(|iface| self.should_collect(iface.interface.as_str()));
 
-        let mut guard = self.measurement.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_ref() {
-            None => *guard = Some(stats),
-            Some(prev) => {
-                if prev.timestamp < stats.timestamp {
-                    *guard = Some(stats);
-                }
-            }
-        }
+        let guard = self.measurement.lock().unwrap_or_else(|e| e.into_inner());
+        update_measurement_if(guard, stats, |old, new| old.timestamp < new.timestamp);
 
         Ok(())
     }

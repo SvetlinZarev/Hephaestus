@@ -1,6 +1,7 @@
 use num_traits::ToPrimitive;
 use prometheus::core::Desc;
 use prometheus::proto::{LabelPair, MetricFamily, MetricType};
+use std::sync::MutexGuard;
 
 pub fn into_labels(kv: &[(&str, &str)]) -> Vec<LabelPair> {
     kv.iter()
@@ -76,4 +77,19 @@ pub fn counter(desc: &Desc, label_values: Vec<LabelPair>, value: f64) -> MetricF
 
     mf.set_metric(vec![m]);
     mf
+}
+
+pub fn update_measurement_if<T>(
+    mut guard: MutexGuard<Option<T>>,
+    value: T,
+    predicate: impl Fn(&T, &T) -> bool,
+) {
+    match guard.as_ref() {
+        None => *guard = Some(value),
+        Some(prev) => {
+            if predicate(prev, &value) {
+                *guard = Some(value);
+            }
+        }
+    }
 }
